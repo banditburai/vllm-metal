@@ -52,7 +52,7 @@ get_repo_root() {
 }
 
 uv_pip_install_pytorch() {
-  USE_CUDA=0 USE_CUDNN=0 USE_ROCM=0 USE_MPS=1 uv pip install "$pytorch_dir"
+  USE_CUDA=0 USE_CUDNN=0 USE_ROCM=0 USE_XPU=0 USE_MPS=1 uv pip install "$pytorch_dir"
 }
 
 # Install PyTorch from submodule
