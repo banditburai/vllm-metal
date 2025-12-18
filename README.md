@@ -108,15 +108,15 @@ curl http://localhost:8000/v1/chat/completions \
                               ▼
 ┌────────────────────────────────────────────────────────────┐
 │              Unified Compute Backend                       │
-│  ┌──────────────────────┐  ┌──────────────────────────────┐│
-│  │   MLX Backend        │  │   PyTorch Backend            ││
-│  │   (Primary)          │  │   (Model Loading/Interop)    ││
-│  │                      │  │                              ││
-│  │ • SDPA Attention     │  │ • HuggingFace Loading        ││
-│  │ • RMSNorm            │  │ • Weight Conversion          ││
-│  │ • RoPE               │  │ • Tensor Bridge              ││
-│  │ • Cache Ops          │  │                              ││
-│  └──────────────────────┘  └──────────────────────────────┘│
+│  ┌──────────────────────┐  ┌─────────────────────────────┐ │
+│  │   MLX Backend        │  │   PyTorch Backend           │ │
+│  │   (Primary)          │  │   (Model Loading/Interop)   │ │
+│  │                      │  │                             │ │
+│  │ • SDPA Attention     │  │ • HuggingFace Loading       │ │
+│  │ • RMSNorm            │  │ • Weight Conversion         │ │
+│  │ • RoPE               │  │ • Tensor Bridge             │ │
+│  │ • Cache Ops          │  │                             │ │
+│  └──────────────────────┘  └─────────────────────────────┘ │
 └────────────────────────────────────────────────────────────┘
                               │
                               ▼
