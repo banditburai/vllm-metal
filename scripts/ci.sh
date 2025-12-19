@@ -95,7 +95,7 @@ main() {
 
   installs
   # shellcheck source=/dev/null
-  source .venv/bin/activate
+  source .venv-vllm-metal/bin/activate
 
   linters
 
