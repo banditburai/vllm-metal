@@ -37,7 +37,7 @@ ensure_uv() {
 
 # Ensure virtual environment exists and is activated
 ensure_venv() {
-  if [ ! -d ".venv" ]; then
+  if [ ! -d "$1" ]; then
     section "Creating virtual environment"
     uv venv "$1" --clear --python 3.12
   fi
