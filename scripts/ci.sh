@@ -11,8 +11,8 @@ smoke_test() {
 
   # 2. Wait for the server to be ready
   echo "Waiting for vLLM to start..."
-  local url="http://localhost:8000/health"
-  if ! curl --retry 4 --retry-all-errors -s "$url" > /dev/null; then
+  local health_url="http://localhost:8000/health"
+  if ! curl --retry 4 --retry-all-errors -s "$health_url" > /dev/null; then
     echo "vLLM failed to start."
 
     kill $vllm_pid
@@ -21,6 +21,27 @@ smoke_test() {
   fi
 
   echo "Model loaded successfully!"
+
+  # 3. Test chat completions endpoint
+  echo "Testing chat completions endpoint..."
+  local chat_url="http://localhost:8000/v1/chat/completions"
+  local response
+  response=$(curl -s -X POST "$chat_url" \
+    -H "Content-Type: application/json" \
+    -d '{
+      "model": "Qwen/Qwen3-0.6B",
+      "messages": [{"role": "user", "content": "Say hello"}],
+      "max_tokens": 32
+    }')
+
+  if ! echo "$response" | grep -q '"choices"'; then
+    echo "Chat completions test failed. Response:"
+    echo "$response"
+    kill $vllm_pid
+    exit 1
+  fi
+
+  echo "Chat completions test passed!"
 
   kill $vllm_pid
 }
