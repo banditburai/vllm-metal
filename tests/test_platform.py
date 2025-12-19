@@ -88,13 +88,6 @@ class TestMetalPlatform:
 
         backend_cls = MetalPlatform.get_attn_backend_cls(
             selected_backend=None,
-            head_size=64,
-            dtype=None,
-            kv_cache_dtype=None,
-            block_size=16,
-            use_v1=True,
-            use_mla=False,
-            has_sink=False,
-            use_sparse=False,
+            attn_selector_config=None,
         )
         assert backend_cls == "vllm_metal.attention.backend.MetalAttentionBackend"

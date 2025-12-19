@@ -73,7 +73,9 @@ try:
     from vllm.v1.worker.gpu.model_runner import GPUModelRunner
 except ImportError:
     try:
-        from vllm.worker.model_runner import ModelRunner as GPUModelRunner
+        from vllm.worker.model_runner import (  # type: ignore[no-redef]
+            ModelRunner as GPUModelRunner,
+        )
     except ImportError:
         GPUModelRunner = object  # type: ignore[misc, assignment]
 

@@ -122,10 +122,10 @@ main() {
   local url_base="https://github.com/vllm-project/vllm/releases/download"
   local filename="vllm-$vllm_v.tar.gz"
   curl -OL $url_base/v$vllm_v/$filename
-  tar xvf $filename
+  tar xf $filename
   cd vllm-$vllm_v
   uv pip install -r requirements/cpu.txt --index-strategy unsafe-best-match
-  uv pip install -e .
+  uv pip install .
   cd -
   rm -rf vllm-$vllm_v*
 

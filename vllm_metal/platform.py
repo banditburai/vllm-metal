@@ -247,24 +247,18 @@ class MetalPlatform(Platform):
     def get_attn_backend_cls(
         cls,
         selected_backend,
-        head_size: int,
-        dtype,
-        kv_cache_dtype,
-        block_size: int,
-        use_v1: bool,
-        use_mla: bool,
-        has_sink: bool,
-        use_sparse: bool,
+        attn_selector_config=None,
     ) -> str:
         """Get the attention backend class path for Metal.
 
         Returns our custom Metal attention backend that uses MLX's
         scaled_dot_product_attention.
         """
-        if use_mla:
-            raise NotImplementedError("MLA is not supported on Metal.")
-        if use_sparse:
-            raise NotImplementedError("Sparse Attention is not supported on Metal.")
+        if attn_selector_config is not None:
+            if getattr(attn_selector_config, "use_mla", False):
+                raise NotImplementedError("MLA is not supported on Metal.")
+            if getattr(attn_selector_config, "use_sparse", False):
+                raise NotImplementedError("Sparse Attention is not supported on Metal.")
 
         return "vllm_metal.attention.backend.MetalAttentionBackend"
 

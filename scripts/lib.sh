@@ -71,7 +71,7 @@ get_version() {
 
 check_python_version() {
   local min_major="${1:-3}"
-  local min_minor="${2:-11}"
+  local min_minor="${2:-12}"
 
   if ! command -v python3 &> /dev/null; then
     error "Python 3 is not installed"

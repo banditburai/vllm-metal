@@ -109,6 +109,16 @@ class MetalAttentionMetadataBuilder:
         else:
             self.device = device
 
+    @staticmethod
+    def get_cudagraph_support(vllm_config, kv_cache_spec):
+        """Return CUDA graph support level for Metal.
+
+        Metal doesn't support CUDA graphs, so return NEVER.
+        """
+        from vllm.v1.attention.backends.utils import AttentionCGSupport
+
+        return AttentionCGSupport.NEVER
+
     def build(
         self,
         common_prefix_len: int,

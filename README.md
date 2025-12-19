@@ -6,7 +6,7 @@ vLLM Metal is a plugin that enables vLLM to run on Apple Silicon Macs using MLX 
 
 ## Features
 
-- **MLX-accelerated inference**: 10-25x faster than PyTorch MPS on Apple Silicon
+- **MLX-accelerated inference**: faster than PyTorch MPS on Apple Silicon
 - **Unified memory**: True zero-copy operations leveraging Apple Silicon's unified memory architecture
 - **vLLM compatibility**: Full integration with vLLM's engine, scheduler, and OpenAI-compatible API
 - **Paged attention**: Efficient KV cache management for long sequences
