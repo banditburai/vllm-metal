@@ -5,85 +5,84 @@ This module provides PyTorch/MLX implementations of penalty functions
 that replace Triton kernels on the Metal backend.
 """
 
+from typing import TYPE_CHECKING
+
 import torch
+
+if TYPE_CHECKING:
+    from vllm.v1.worker.gpu.input_batch import SamplingMetadata
 
 
 def apply_penalties_and_temperature(
     logits: torch.Tensor,
-    temperatures: torch.Tensor,
-    presence_penalties: torch.Tensor,
-    frequency_penalties: torch.Tensor,
-    repetition_penalties: torch.Tensor,
-    output_token_ids: torch.Tensor,
-    bin_counts: torch.Tensor,
-    vocab_size: int,
-) -> torch.Tensor:
-    """Apply penalties and temperature to logits.
+    sampling_metadata: "SamplingMetadata",
+) -> None:
+    """Apply penalties and temperature to logits (in-place).
 
-    This function applies various sampling penalties and temperature
-    scaling to logits for controlled text generation.
+    This function matches vLLM's signature and replaces the Triton kernel
+    version with a pure PyTorch implementation for Metal compatibility.
 
     Args:
-        logits: Raw model logits [batch_size, vocab_size].
-        temperatures: Temperature values [batch_size].
-        presence_penalties: Presence penalty values [batch_size].
-        frequency_penalties: Frequency penalty values [batch_size].
-        repetition_penalties: Repetition penalty values [batch_size].
-        output_token_ids: Previously generated tokens [batch_size, max_len].
-        bin_counts: Token frequency counts [batch_size, vocab_size].
-        vocab_size: Size of the vocabulary.
-
-    Returns:
-        Modified logits with penalties and temperature applied.
+        logits: Raw model logits [num_reqs, vocab_size]. Modified in-place.
+        sampling_metadata: Sampling metadata containing penalty values.
     """
-    batch_size = logits.shape[0]
-    device = logits.device
+    num_reqs, vocab_size = logits.shape
 
-    # Apply temperature scaling
-    # Temperature of 0 means greedy (handled separately)
-    temp_mask = temperatures > 0
-    if temp_mask.any():
-        logits[temp_mask] = logits[temp_mask] / temperatures[temp_mask].unsqueeze(-1)
+    # Extract values from sampling_metadata
+    temperatures = sampling_metadata.temperature
+    repetition_penalties = sampling_metadata.repetition_penalty
+    presence_penalties = sampling_metadata.presence_penalty
+    frequency_penalties = sampling_metadata.frequency_penalty
 
-    # Apply repetition penalty
-    # Repetition penalty multiplies logits of previously seen tokens
-    rep_mask = repetition_penalties != 1.0
-    if rep_mask.any():
-        for i in range(batch_size):
-            if repetition_penalties[i] != 1.0:
-                # Get unique tokens that have been generated
-                seen_tokens = output_token_ids[i][output_token_ids[i] >= 0].unique()
+    # Check if we need to apply any penalties (not just temperature)
+    needs_penalties = (
+        (repetition_penalties != 1.0).any()
+        or (presence_penalties != 0.0).any()
+        or (frequency_penalties != 0.0).any()
+    )
 
-                if len(seen_tokens) > 0:
-                    penalty = repetition_penalties[i]
+    if needs_penalties:
+        # Get the bin data for penalty application
+        idx_mapping = sampling_metadata.idx_mapping
+        output_bin_counts = sampling_metadata.output_bin_counts  # [max_num_reqs, vocab_size]
 
-                    # Apply penalty: divide positive logits, multiply negative
-                    for token in seen_tokens:
-                        if token < vocab_size:
-                            if logits[i, token] > 0:
-                                logits[i, token] = logits[i, token] / penalty
-                            else:
-                                logits[i, token] = logits[i, token] * penalty
+        for req_idx in range(num_reqs):
+            slot_idx = int(idx_mapping[req_idx])
 
-    # Apply presence penalty
-    # Presence penalty subtracts from logits of tokens that appear
-    pres_mask = presence_penalties != 0.0
-    if pres_mask.any():
-        for i in range(batch_size):
-            if presence_penalties[i] != 0.0:
-                # Create presence mask from bin_counts
-                present = bin_counts[i] > 0
-                logits[i] = logits[i] - presence_penalties[i] * present.float()
+            # Get penalty values for this request
+            rep_penalty = float(repetition_penalties[req_idx])
+            pres_penalty = float(presence_penalties[req_idx])
+            freq_penalty = float(frequency_penalties[req_idx])
 
-    # Apply frequency penalty
-    # Frequency penalty subtracts proportionally to occurrence count
-    freq_mask = frequency_penalties != 0.0
-    if freq_mask.any():
-        for i in range(batch_size):
-            if frequency_penalties[i] != 0.0:
-                logits[i] = logits[i] - frequency_penalties[i] * bin_counts[i].float()
+            # Get output counts for this request (tracks generated tokens)
+            if output_bin_counts is not None and slot_idx < output_bin_counts.shape[0]:
+                output_counts = output_bin_counts[slot_idx]  # [vocab_size]
 
-    return logits
+                # Only use output_counts if it matches vocab_size
+                if output_counts.shape[0] == vocab_size:
+                    # Apply repetition penalty to generated tokens
+                    if rep_penalty != 1.0:
+                        token_mask = output_counts > 0
+                        if token_mask.any():
+                            pos_mask = token_mask & (logits[req_idx] > 0)
+                            neg_mask = token_mask & (logits[req_idx] <= 0)
+                            logits[req_idx, pos_mask] = logits[req_idx, pos_mask] / rep_penalty
+                            logits[req_idx, neg_mask] = logits[req_idx, neg_mask] * rep_penalty
+
+                    # Apply presence penalty (subtract for each unique token)
+                    if pres_penalty != 0.0:
+                        token_mask = (output_counts > 0).float()
+                        logits[req_idx] = logits[req_idx] - pres_penalty * token_mask
+
+                    # Apply frequency penalty (subtract proportional to count)
+                    if freq_penalty != 0.0:
+                        logits[req_idx] = logits[req_idx] - freq_penalty * output_counts.float()
+
+    # Apply temperature scaling (always needed)
+    for req_idx in range(num_reqs):
+        temp = float(temperatures[req_idx])
+        if temp > 0:
+            logits[req_idx] = logits[req_idx] / temp
 
 
 def apply_temperature(

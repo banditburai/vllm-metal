@@ -53,6 +53,53 @@ try:
 except ImportError:
     pass
 
+# Patch states module for MPS compatibility (UVA / unified memory)
+# Apple Silicon has true unified memory, so we can use regular tensors
+try:
+    import vllm.v1.worker.gpu.states as states_module
+    import numpy as np
+
+    # Apple Silicon has unified memory - similar to UVA
+    states_module.is_uva_available = lambda: True
+
+    # Patch UvaBuffer to work with MPS unified memory
+    class _MetalUvaBuffer:
+        """MPS-compatible UvaBuffer using unified memory.
+
+        Apple Silicon has true unified memory - CPU and GPU share the same
+        physical memory. However, PyTorch MPS doesn't share memory between
+        CPU and MPS tensors like CUDA UVA does.
+
+        Solution: Use CPU tensors for both cpu and gpu attributes.
+        MPS operations can accept CPU tensors directly (with auto data movement).
+        This ensures writes to cpu/np are immediately visible to gpu.
+        """
+        def __init__(self, *size, dtype):
+            # Keep everything on CPU - this is the source of truth
+            self.cpu = torch.zeros(*size, dtype=dtype, device="cpu")
+            self.np = self.cpu.numpy()
+            # gpu is the same tensor - MPS can accept CPU tensors
+            # This ensures all modifications are visible to both
+            self.gpu = self.cpu
+
+    states_module.UvaBuffer = _MetalUvaBuffer
+    logger.debug("Patched states_module for Metal unified memory")
+except ImportError as e:
+    logger.warning(f"Failed to patch states module: {e}")
+
+# =============================================================================
+# Patch BlockTables with Metal-compatible implementation (pure PyTorch)
+# =============================================================================
+try:
+    import vllm.v1.worker.gpu.block_table as block_table_module
+    from vllm_metal.v2.metal_block_table import MetalBlockTables
+
+    # Replace the entire BlockTables class with our Metal implementation
+    block_table_module.BlockTables = MetalBlockTables
+    logger.debug("Patched BlockTables with MetalBlockTables for Metal")
+except ImportError as e:
+    logger.warning(f"Failed to patch block_table module: {e}")
+
 # Patch input_batch functions BEFORE importing GPUModelRunner
 try:
     import vllm.v1.worker.gpu.input_batch as input_batch_module
@@ -107,6 +154,86 @@ try:
 except ImportError as e:
     logger.warning(f"Failed to patch async_utils module: {e}")
 
+
+# =============================================================================
+# Mock classes for CUDA compatibility on MPS
+# =============================================================================
+
+class _MockCudaStream:
+    """Mock CUDA stream for MPS compatibility."""
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def wait_stream(self, stream):
+        pass
+
+    def synchronize(self):
+        torch.mps.synchronize()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+
+class _MockCudaEvent:
+    """Mock CUDA event for MPS compatibility."""
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def record(self, stream=None):
+        pass
+
+    def wait(self, stream=None):
+        pass
+
+    def synchronize(self):
+        torch.mps.synchronize()
+
+    def query(self):
+        return True
+
+
+class _MockCudaGraphManager:
+    """Mock CudaGraphManager for MPS compatibility."""
+    def __init__(self, vllm_config, device):
+        self.vllm_config = vllm_config
+        self.device = device
+        self.pool = None
+        self.cudagraph_mode = None
+        self.capture_sizes = []
+        self.disabled = True
+
+    def capture(self, *args, **kwargs):
+        pass
+
+    def replay(self, *args, **kwargs):
+        return None
+
+    def get_graph(self, *args, **kwargs):
+        return None
+
+    def should_use_cudagraph(self, *args, **kwargs):
+        return False
+
+    def get_cudagraph_size(self, *args, **kwargs):
+        # Return None to indicate no cudagraph should be used
+        return None
+
+    def get_cudagraph(self, *args, **kwargs):
+        return None
+
+
+# Patch CudaGraphManager BEFORE importing GPUModelRunner
+try:
+    import vllm.v1.worker.gpu.cudagraph_utils as cudagraph_utils_module
+    cudagraph_utils_module.CudaGraphManager = _MockCudaGraphManager
+    logger.debug("Patched CudaGraphManager for Metal")
+except ImportError as e:
+    logger.warning(f"Failed to patch cudagraph_utils: {e}")
+
+
 # Now import the rest of vLLM modules (they will get our patched functions)
 from vllm.model_executor.model_loader import get_model  # noqa: E402
 from vllm.v1.kv_cache_interface import KVCacheConfig  # noqa: E402
@@ -117,8 +244,9 @@ from vllm.v1.worker.gpu.attn_utils import (  # noqa: E402
 )
 from vllm.v1.worker.gpu.model_runner import GPUModelRunner  # noqa: E402
 
-# Use our Metal-compatible BlockTables
-from vllm_metal.v2.block_table import MetalBlockTables as BlockTables  # noqa: E402
+# Use our Metal-compatible BlockTables (pure PyTorch, no Triton)
+# Note: block_table_module.BlockTables is already patched above
+from vllm.v1.worker.gpu.block_table import BlockTables  # noqa: E402
 
 # Patch states module's bincount reference
 try:
@@ -131,13 +259,29 @@ except (ImportError, AttributeError):
 
 
 @contextmanager
-def _torch_cuda_wrapper():
-    """Context manager to handle CUDA references during init.
+def _patch_cuda_for_mps():
+    """Context manager to patch CUDA stream/event/graph for MPS compatibility.
 
-    Some vLLM code paths reference torch.cuda even on non-CUDA platforms.
-    This wrapper provides a no-op for those references.
+    vLLM's GPUModelRunner.__init__ creates CUDA streams, events and graphs.
+    We temporarily replace them with MPS-compatible mocks.
     """
-    yield
+    original_stream = torch.cuda.Stream
+    original_event = torch.cuda.Event
+    original_current_stream = torch.cuda.current_stream
+    original_graph_pool = getattr(torch.cuda, 'graph_pool_handle', None)
+
+    try:
+        torch.cuda.Stream = _MockCudaStream
+        torch.cuda.Event = _MockCudaEvent
+        torch.cuda.current_stream = lambda device=None: _MockCudaStream()
+        torch.cuda.graph_pool_handle = lambda: None
+        yield
+    finally:
+        torch.cuda.Stream = original_stream
+        torch.cuda.Event = original_event
+        torch.cuda.current_stream = original_current_stream
+        if original_graph_pool is not None:
+            torch.cuda.graph_pool_handle = original_graph_pool
 
 
 class MetalModelRunner(GPUModelRunner):
@@ -152,14 +296,17 @@ class MetalModelRunner(GPUModelRunner):
     """
 
     def __init__(self, vllm_config: VllmConfig, device: torch.device):
-        # Use the CUDA wrapper to prevent CUDA stream/event creation
-        with _torch_cuda_wrapper():
+        # Patch CUDA stream/event to work with MPS before calling parent init
+        with _patch_cuda_for_mps():
             super().__init__(vllm_config, device)
 
         # Override CUDA-specific settings
         self.pin_memory = False  # Metal uses unified memory
         self.use_cuda_graph = False
         self.cascade_attn_enabled = False
+
+        # Replace the mock streams with our MPS-compatible versions
+        self.output_copy_stream = _MockCudaStream()
 
         # Replace GPU tensors with MPS equivalents
         self._postprocess_tensors()
@@ -202,3 +349,47 @@ class MetalModelRunner(GPUModelRunner):
         self.model = self.model.to(self.device)
 
         logger.info("Model loaded successfully")
+
+    def initialize_kv_cache(self, kv_cache_config: KVCacheConfig) -> None:
+        """Initialize KV cache for Metal backend.
+
+        This overrides GPUModelRunner's method to remove the FLASH_ATTN check.
+        Metal backend uses its own attention implementation.
+        """
+        from copy import deepcopy
+
+        kv_cache_config = deepcopy(kv_cache_config)
+        self.kv_cache_config = kv_cache_config
+        block_sizes = [
+            kv_cache_group.kv_cache_spec.block_size
+            for kv_cache_group in kv_cache_config.kv_cache_groups
+        ]
+
+        self.block_tables = BlockTables(
+            block_sizes=block_sizes,
+            max_num_reqs=self.max_num_reqs,
+            max_num_batched_tokens=self.max_num_tokens,
+            max_model_len=self.max_model_len,
+            device=self.device,
+            pin_memory=self.pin_memory,
+        )
+
+        self.attn_backends, self.attn_metadata_builders = init_attn_backend(
+            self.kv_cache_config,
+            self.vllm_config,
+            self.device,
+        )
+
+        # Metal backend - no FLASH_ATTN check needed
+        logger.info(f"Metal attention backends initialized: {list(self.attn_backends.keys())}")
+
+        self.kv_caches: list[torch.Tensor] = []
+        init_kv_cache(
+            self.kv_caches,
+            self.compilation_config.static_forward_context,
+            self.kv_cache_config,
+            self.attn_backends,
+            self.device,
+        )
+        # Attention groups are not supported.
+        self.attn_groups = []  # type: ignore

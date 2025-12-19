@@ -10,7 +10,10 @@ import torch
 
 def gumbel_sample(
     logits: torch.Tensor,
-    generator: torch.Generator | None = None,
+    temperatures: torch.Tensor,
+    seeds: torch.Tensor | None = None,
+    pos: torch.Tensor | None = None,
+    apply_temperature: bool = True,
 ) -> torch.Tensor:
     """Sample from a categorical distribution using Gumbel-max trick.
 
@@ -22,29 +25,59 @@ def gumbel_sample(
     This is more numerically stable than softmax + multinomial for
     large vocabularies.
 
+    For greedy sampling (temperature=0), we skip the Gumbel noise
+    and use direct argmax.
+
     Args:
         logits: Unnormalized log probabilities [batch_size, vocab_size].
-        generator: Optional random number generator.
+        temperatures: Temperature values [batch_size].
+        seeds: Optional random seeds per request (not used in this implementation).
+        pos: Optional position values (not used in this implementation).
+        apply_temperature: Whether to apply temperature scaling.
 
     Returns:
         Sampled token indices [batch_size].
     """
-    # Generate Gumbel noise: -log(-log(uniform))
-    # Using a small epsilon to avoid log(0)
-    eps = 1e-10
+    batch_size = logits.shape[0]
+    device = logits.device
+    samples = torch.zeros(batch_size, dtype=torch.long, device=device)
 
-    # Generate uniform random numbers
-    uniform = torch.rand_like(logits, generator=generator)
+    # Handle greedy sampling (temperature == 0) separately
+    greedy_mask = temperatures == 0
+    if greedy_mask.any():
+        samples[greedy_mask] = torch.argmax(logits[greedy_mask], dim=-1)
 
-    # Clip to avoid numerical issues
-    uniform = uniform.clamp(min=eps, max=1.0 - eps)
+    # Handle non-greedy sampling with Gumbel noise
+    non_greedy_mask = ~greedy_mask
+    if non_greedy_mask.any():
+        non_greedy_logits = logits[non_greedy_mask].clone()
 
-    # Compute Gumbel noise
-    gumbel_noise = -torch.log(-torch.log(uniform))
+        # Apply temperature if requested
+        if apply_temperature and temperatures is not None:
+            non_greedy_temps = temperatures[non_greedy_mask]
+            temp_mask = non_greedy_temps > 0
+            if temp_mask.any():
+                non_greedy_logits[temp_mask] = (
+                    non_greedy_logits[temp_mask] / non_greedy_temps[temp_mask].unsqueeze(-1)
+                )
 
-    # Add noise to logits and take argmax
-    noisy_logits = logits + gumbel_noise
-    samples = torch.argmax(noisy_logits, dim=-1)
+        # Generate Gumbel noise: -log(-log(uniform))
+        # Using a small epsilon to avoid log(0)
+        eps = 1e-10
+
+        # Generate uniform random numbers
+        uniform = torch.rand_like(non_greedy_logits)
+
+        # Clip to avoid numerical issues
+        uniform = uniform.clamp(min=eps, max=1.0 - eps)
+
+        # Compute Gumbel noise
+        gumbel_noise = -torch.log(-torch.log(uniform))
+
+        # Add noise to logits and take argmax
+        noisy_logits = non_greedy_logits + gumbel_noise
+        samples[non_greedy_mask] = torch.argmax(noisy_logits, dim=-1)
+
 
     return samples
 

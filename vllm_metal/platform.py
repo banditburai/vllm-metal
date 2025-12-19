@@ -1,6 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """Metal Platform implementation for vLLM."""
 
+import os
+
+# Disable torch.compile completely - inductor requires triton which isn't available on macOS
+os.environ["TORCH_COMPILE_DISABLE"] = "1"
+os.environ["TORCHDYNAMO_DISABLE"] = "1"
+
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
@@ -182,6 +188,18 @@ class MetalPlatform(Platform):
             if cache_config.block_size is None:
                 cache_config.block_size = 16
                 logger.info("Metal backend: Using block_size=16 for KV cache")
+
+            # Cap GPU memory utilization to avoid MPS memory issues
+            # Large KV cache allocations (>~16,000 blocks) cause incorrect
+            # model outputs on MPS. This appears to be a PyTorch MPS bug.
+            max_metal_gpu_memory = 0.75
+            if cache_config.gpu_memory_utilization > max_metal_gpu_memory:
+                logger.warning(
+                    f"Metal backend: Capping gpu_memory_utilization from "
+                    f"{cache_config.gpu_memory_utilization} to {max_metal_gpu_memory} "
+                    f"to avoid MPS memory issues with large KV caches"
+                )
+                cache_config.gpu_memory_utilization = max_metal_gpu_memory
 
         # Metal always runs in eager mode (no CUDA graph support)
         if model_config is not None:

@@ -40,7 +40,7 @@ def mlx_synchronize() -> None:
 def mlx_clear_cache() -> None:
     """Clear MLX memory cache."""
     try:
-        mx.metal.clear_cache()
+        mx.clear_cache()
     except AttributeError:
         # Older MLX versions may not have this
         pass

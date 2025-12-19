@@ -138,7 +138,7 @@ def metal_empty_cache() -> None:
     try:
         import mlx.core as mx
 
-        mx.metal.clear_cache()
+        mx.clear_cache()
     except (ImportError, AttributeError):
         pass
 

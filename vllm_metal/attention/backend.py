@@ -51,13 +51,20 @@ class MetalAttentionMetadata(AttentionMetadata):
 
     @property
     def is_all_prefill(self) -> bool:
-        """Check if all requests are in prefill phase."""
-        return self.query_start_loc is not None and self.block_table is None
+        """Check if all requests are in prefill phase.
+
+        In vLLM V1 with paged attention, block_table may always be present.
+        Use max_query_len to distinguish prefill (>1) from decode (==1).
+        """
+        return self.max_query_len > 1
 
     @property
     def is_all_decode(self) -> bool:
-        """Check if all requests are in decode phase."""
-        return self.query_start_loc is None and self.block_table is not None
+        """Check if all requests are in decode phase.
+
+        Decode phase processes exactly 1 token per sequence.
+        """
+        return self.max_query_len == 1 and self.block_table is not None
 
     def get_seq_lens(self) -> torch.Tensor:
         """Get sequence lengths."""
@@ -70,18 +77,63 @@ class MetalAttentionMetadataBuilder:
     """Builder for MetalAttentionMetadata.
 
     This class helps construct attention metadata from batch information.
+    Compatible with vLLM V1 engine interface.
     """
 
     def __init__(
         self,
+        kv_cache_spec: Any = None,
+        layer_names: Optional[List[str]] = None,
+        vllm_config: Any = None,
         device: torch.device = torch.device("mps"),
     ):
         """Initialize the metadata builder.
 
         Args:
+            kv_cache_spec: KV cache specification from vLLM V1.
+            layer_names: Names of attention layers in this group.
+            vllm_config: vLLM configuration.
             device: Target device for tensors.
         """
-        self.device = device
+        self.kv_cache_spec = kv_cache_spec
+        self.layer_names = layer_names or []
+        self.vllm_config = vllm_config
+        # Handle device parameter - can be string or torch.device
+        if isinstance(device, str):
+            self.device = torch.device(device)
+        elif device is not None:
+            self.device = device
+        else:
+            self.device = torch.device("mps")
+
+    def build(
+        self,
+        common_prefix_len: int,
+        common_attn_metadata: Any,
+        fast_build: bool = False,
+    ) -> MetalAttentionMetadata:
+        """Build attention metadata from CommonAttentionMetadata.
+
+        This is the main entry point called by vLLM V1's build_attn_metadata.
+
+        Args:
+            common_prefix_len: Length of common prefix across sequences.
+            common_attn_metadata: CommonAttentionMetadata containing batch info.
+            fast_build: Whether to skip expensive computations.
+
+        Returns:
+            MetalAttentionMetadata for this batch.
+        """
+        return MetalAttentionMetadata(
+            num_actual_tokens=common_attn_metadata.num_actual_tokens,
+            max_query_len=common_attn_metadata.max_query_len,
+            max_seq_len=common_attn_metadata.max_seq_len,
+            query_start_loc=common_attn_metadata.query_start_loc,
+            seq_lens=common_attn_metadata.seq_lens,
+            block_table=common_attn_metadata.block_table_tensor,
+            slot_mapping=common_attn_metadata.slot_mapping,
+            device=self.device,
+        )
 
     def build_prefill_metadata(
         self,
@@ -170,6 +222,10 @@ class MetalAttentionBackend(AttentionBackend):
     scaled_dot_product_attention on Apple Silicon.
     """
 
+    # Tell vLLM to reshape Q/K/V tensors to [num_tokens, num_heads, head_size]
+    # before calling impl.forward(), and to reshape output back after.
+    accept_output_buffer = True
+
     @staticmethod
     def get_name() -> str:
         """Get the name of this backend."""
@@ -201,6 +257,9 @@ class MetalAttentionBackend(AttentionBackend):
     ) -> Tuple[int, ...]:
         """Get the shape of the KV cache.
 
+        vLLM V1 allocates K and V together, so the shape includes
+        a dimension of 2 for the K/V split.
+
         Args:
             num_blocks: Number of cache blocks.
             block_size: Tokens per block.
@@ -208,9 +267,11 @@ class MetalAttentionBackend(AttentionBackend):
             head_size: Size of each head.
 
         Returns:
-            Shape tuple for the cache tensors.
+            Shape tuple for the cache tensors (includes both K and V).
         """
-        return (num_blocks, block_size, num_kv_heads, head_size)
+        # Shape: (2, num_blocks, block_size, num_kv_heads, head_size)
+        # where 2 is for K and V
+        return (2, num_blocks, block_size, num_kv_heads, head_size)
 
     @staticmethod
     def swap_blocks(

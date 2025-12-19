@@ -13,6 +13,11 @@ The plugin unifies MLX and PyTorch under a single lowering path:
 
 import os
 
+# Disable torch.compile completely - inductor requires triton which isn't available on macOS
+# This must be set before torch is imported anywhere.
+os.environ["TORCH_COMPILE_DISABLE"] = "1"
+os.environ["TORCHDYNAMO_DISABLE"] = "1"
+
 # Metal requires V2 model runner which properly handles prefill_token_ids
 # in the scheduler. This must be set BEFORE vllm.envs is imported anywhere.
 os.environ.setdefault("VLLM_USE_V2_MODEL_RUNNER", "1")
