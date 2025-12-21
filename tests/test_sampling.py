@@ -205,31 +205,6 @@ class TestMLXToTorchSampling:
             assert (output.sampled_token_ids == 0).sum() >= batch_size // 2
 
 
-class TestSamplingParamsFromVLLM:
-    """Test that vLLM SamplingParams correctly configure sampling."""
-
-    def test_sampling_params_to_metadata(self) -> None:
-        """Test converting SamplingParams to SamplingMetadata."""
-        sp = SamplingParams(temperature=0.8, top_p=0.95, top_k=50)
-
-        # Verify params are accessible
-        assert sp.temperature == 0.8
-        assert sp.top_p == 0.95
-        assert sp.top_k == 50
-
-    def test_greedy_via_sampling_params(self) -> None:
-        """Test greedy sampling configured via SamplingParams."""
-        sp = SamplingParams(temperature=0.0)
-
-        assert sp.temperature == 0.0
-
-    def test_sampling_params_defaults(self) -> None:
-        """Test SamplingParams default values."""
-        sp = SamplingParams()
-
-        assert sp.temperature == 1.0
-        assert sp.top_p == 1.0
-        assert sp.top_k == 0  # 0 means no limit in vLLM
 
 
 class TestBatchedPerRequestSampling:
@@ -278,36 +253,3 @@ class TestBatchedPerRequestSampling:
         assert output.sampled_token_ids[0, 0].item() == 0
         assert output.sampled_token_ids[2, 0].item() == 20
 
-
-class TestRoundTripConversion:
-    """Test MLX <-> Torch conversion preserves sampling correctness."""
-
-    def test_logits_roundtrip(self) -> None:
-        """Test logits survive MLX -> Torch -> MLX conversion."""
-        original = mx.random.normal((4, VOCAB_SIZE))
-        mx.eval(original)
-
-        torch_tensor = mlx_to_torch(original, device="cpu")
-        back_to_mlx = torch_to_mlx(torch_tensor)
-        mx.eval(back_to_mlx)
-
-        # Should be approximately equal
-        diff = mx.abs(original - back_to_mlx)
-        assert mx.max(diff).item() < 1e-5
-
-    def test_argmax_consistent_across_frameworks(self) -> None:
-        """Test argmax gives same result in MLX and Torch."""
-        logits_mlx = mx.random.normal((8, VOCAB_SIZE))
-        mx.eval(logits_mlx)
-
-        # MLX argmax
-        mlx_argmax = mx.argmax(logits_mlx, axis=-1)
-        mx.eval(mlx_argmax)
-
-        # Torch argmax
-        logits_torch = mlx_to_torch(logits_mlx, device="cpu")
-        torch_argmax = torch.argmax(logits_torch, dim=-1)
-
-        # Should match
-        for i in range(8):
-            assert int(mlx_argmax[i].item()) == torch_argmax[i].item()

@@ -279,7 +279,7 @@ class MetalModelRunner:
         except Exception as e:
             logger.warning(f"Model warm-up failed: {e}")
 
-    def _create_sampling_metadata(
+    def _make_sampling_metadata(
         self,
         sampling_params_list: list[SamplingParams],
         output_token_ids: list[list[int]],
@@ -382,7 +382,7 @@ class MetalModelRunner:
 
         # Convert MLX logits to torch and sample using vLLM's Sampler
         logits_torch = mlx_to_torch(logits[:, -1, :], device="cpu")
-        metadata = self._create_sampling_metadata([sampling_params], [[]])
+        metadata = self._make_sampling_metadata([sampling_params], [[]])
         output = self._sampler.forward(logits_torch, metadata)
         next_token = int(output.sampled_token_ids[0, 0].item())
 
@@ -437,7 +437,7 @@ class MetalModelRunner:
         output_tokens_list = [state.token_ids for _, state in decode_reqs]
 
         logits_torch = mlx_to_torch(next_token_logits, device="cpu")
-        metadata = self._create_sampling_metadata(
+        metadata = self._make_sampling_metadata(
             sampling_params_list, output_tokens_list
         )
         output = self._sampler.forward(logits_torch, metadata)
@@ -481,7 +481,7 @@ class MetalModelRunner:
 
             # Sample using vLLM's Sampler with request's params
             logits_torch = mlx_to_torch(logits[:, -1, :], device="cpu")
-            metadata = self._create_sampling_metadata(
+            metadata = self._make_sampling_metadata(
                 [state.sampling_params], [state.token_ids]
             )
             output = self._sampler.forward(logits_torch, metadata)
