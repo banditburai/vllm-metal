@@ -316,12 +316,13 @@ class MetalModelRunner:
                     gen.manual_seed(sp.seed)
                 generators[i] = gen
 
-        # top_k: pass None if all values are -1 (no filtering)
+        # top_k: pass None if all values indicate no filtering
+        # -1 = vLLM default (no filtering), 0 = OpenAI API convention (no filtering)
         # vLLM's sampler expects None to skip top-k entirely
         top_k_values = [sp.top_k for sp in sampling_params_list]
         top_k = (
             None
-            if all(k == -1 for k in top_k_values)
+            if all(k <= 0 for k in top_k_values)
             else torch.tensor(top_k_values, dtype=torch.int32)
         )
 
