@@ -115,6 +115,18 @@ class TestTensorConversion:
             torch.tensor([[1.0, 2.0], [3.0, 4.0]]),
         )
 
+    def test_mlx_to_torch_view(self) -> None:
+        """MLX views (e.g. slices) should be convertible to torch."""
+        mlx_array = mx.random.normal((2, 3, 4))
+        mlx_view = mlx_array[:, -1, :]
+        mx.eval(mlx_view)
+
+        torch_tensor = mlx_to_torch(mlx_view, device="cpu")
+
+        assert torch_tensor.shape == (2, 4)
+        assert torch_tensor.dtype == torch.float32
+        np.testing.assert_allclose(torch_tensor.numpy(), np.array(mlx_view), rtol=1e-5)
+
     def test_round_trip_conversion(self) -> None:
         """Test round-trip conversion preserves values."""
         # PyTorch -> MLX -> PyTorch

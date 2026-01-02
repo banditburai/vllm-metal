@@ -86,9 +86,15 @@ def mlx_to_torch(
     # reference: https://github.com/ml-explore/mlx/issues/403
     torch_dtype = MLX_TO_TORCH_DTYPE.get(array.dtype)
     if torch_dtype is not None:
-        tensor = torch.frombuffer(memoryview(array), dtype=torch_dtype).reshape(
-            array.shape
-        )
+        # MLX views / non-contiguous arrays expose a non-contiguous buffer (or
+        # sometimes no usable buffer), which `torch.frombuffer` can't consume.
+        buffer = memoryview(array)
+        if not buffer.c_contiguous:
+            array = mx.contiguous(array)
+            mx.eval(array)
+            buffer = memoryview(array)
+
+        tensor = torch.frombuffer(buffer, dtype=torch_dtype).reshape(array.shape)
     else:
         # Fallback to numpy path for unsupported dtypes
         raise ValueError(f"Unsupported MLX dtype: {array.dtype}")
