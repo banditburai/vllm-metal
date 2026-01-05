@@ -125,3 +125,66 @@ class TestMetalPlatform:
         MetalPlatform.verify_quantization("int8")
         MetalPlatform.verify_quantization("awq")
         MetalPlatform.verify_quantization("compressed-tensors")
+
+    def test_synchronize_runs_mlx_barrier(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Platform synchronize should use MX barrier when present."""
+        mx = pytest.importorskip("mlx.core")
+        if not hasattr(mx, "synchronize"):
+            pytest.skip("mlx.core.synchronize not available")
+
+        called = False
+
+        def fake_sync() -> None:
+            nonlocal called
+            called = True
+
+        monkeypatch.setattr(mx, "synchronize", fake_sync)
+        monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+
+        MetalPlatform.synchronize()
+        assert called is True
+
+    def test_synchronize_falls_back_to_eval_when_missing_barrier(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Fallback to evaluation when MX barrier is unavailable."""
+        mx = pytest.importorskip("mlx.core")
+
+        monkeypatch.delattr(mx, "synchronize", raising=False)
+
+        called = False
+
+        def fake_eval(value: mx.array) -> None:
+            nonlocal called
+            called = True
+
+        monkeypatch.setattr(mx, "eval", fake_eval)
+        monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+
+        MetalPlatform.synchronize()
+        assert called is True
+
+    def test_synchronize_falls_back_to_eval_when_barrier_signature_incompatible(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Fallback if MX barrier exists but can't be called with no args."""
+        mx = pytest.importorskip("mlx.core")
+
+        def fake_sync(_stream: object) -> None:
+            return None
+
+        monkeypatch.setattr(mx, "synchronize", fake_sync)
+
+        called = False
+
+        def fake_eval(value: mx.array) -> None:
+            nonlocal called
+            called = True
+
+        monkeypatch.setattr(mx, "eval", fake_eval)
+        monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+
+        MetalPlatform.synchronize()
+        assert called is True
